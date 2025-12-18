@@ -1,0 +1,58 @@
+---
+# Common variables
+app_name: django-app
+environment: dev
+aws_region: us-east-1
+eks_cluster_name: "{{ app_name }}-{{ environment }}"
+app_namespace: "{{ app_name }}-{{ environment }}"
+
+# Docker configuration
+docker_registry: "your-account-id.dkr.ecr.us-east-1.amazonaws.com"
+docker_image_tag: "latest"
+
+# Application configuration
+app_port: 8000
+app_host: "0.0.0.0"
+debug: false
+allowed_hosts: "*"
+
+# Database configuration (from AWS Secrets Manager)
+db_host: "{{ lookup('aws_secret', 'django-app-dev-db-credentials', region=aws_region) | from_json | json_query('host') }}"
+db_port: 5432
+db_name: django_app_db
+db_username: "{{ lookup('aws_secret', 'django-app-dev-db-credentials', region=aws_region) | from_json | json_query('username') }}"
+
+# Redis configuration (from AWS Secrets Manager)
+redis_host: "{{ lookup('aws_secret', 'django-app-dev-redis-connection', region=aws_region) | from_json | json_query('primary_endpoint') }}"
+redis_port: 6379
+
+# Celery configuration
+celery_broker_url: "redis://{{ redis_host }}:{{ redis_port }}/0"
+celery_result_backend: "redis://{{ redis_host }}:{{ redis_port }}/0"
+
+# Kubernetes configuration
+replicas_backend: 2
+replicas_celery_worker: 2
+replicas_celery_beat: 1
+
+# Resource limits
+resources_backend_requests_cpu: "250m"
+resources_backend_requests_memory: "512Mi"
+resources_backend_limits_cpu: "1000m"
+resources_backend_limits_memory: "1Gi"
+
+resources_celery_requests_cpu: "100m"
+resources_celery_requests_memory: "256Mi"
+resources_celery_limits_cpu: "500m"
+resources_celery_limits_memory: "512Mi"
+
+# Monitoring
+enable_cloudwatch: true
+enable_prometheus: true
+prometheus_namespace: monitoring
+
+# Ingress
+ingress_enabled: true
+ingress_class: nginx
+ingress_host: "{{ app_name }}.example.com"
+ingress_tls_enabled: true

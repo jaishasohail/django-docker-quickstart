@@ -1,0 +1,98 @@
+---
+- name: Configure EKS Nodes
+  hosts: aws_ec2
+  become: yes
+  gather_facts: yes
+
+  vars_files:
+    - vars/common.yml
+
+  tasks:
+    - name: Update all packages
+      yum:
+        name: "*"
+        state: latest
+      when: ansible_os_family == "RedHat"
+
+    - name: Install required packages
+      yum:
+        name:
+          - git
+          - curl
+          - wget
+          - vim
+          - htop
+          - jq
+          - python3
+          - python3-pip
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Install Docker (if not present)
+      include_role:
+        name: docker
+
+    - name: Ensure Docker is running
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add ec2-user to docker group
+      user:
+        name: ec2-user
+        groups: docker
+        append: yes
+
+    - name: Install kubectl
+      include_role:
+        name: kubectl
+
+    - name: Install AWS CLI v2
+      include_role:
+        name: aws_cli
+
+    - name: Configure CloudWatch agent
+      include_role:
+        name: cloudwatch_agent
+      when: enable_cloudwatch | default(false)
+
+    - name: Configure node exporter for Prometheus
+      include_role:
+        name: node_exporter
+
+    - name: Optimize kernel parameters
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: yes
+      loop:
+        - { name: "net.ipv4.ip_forward", value: "1" }
+        - { name: "net.bridge.bridge-nf-call-iptables", value: "1" }
+        - { name: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
+        - { name: "vm.max_map_count", value: "262144" }
+        - { name: "fs.file-max", value: "2097152" }
+
+    - name: Set up log rotation
+      copy:
+        dest: /etc/logrotate.d/docker-containers
+        content: |
+          /var/lib/docker/containers/*/*.log {
+            rotate 7
+            daily
+            compress
+            size=10M
+            missingok
+            delaycompress
+            copytruncate
+          }
+
+    - name: Verify node configuration
+      debug:
+        msg:
+          - "Hostname: {{ ansible_hostname }}"
+          - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Kernel: {{ ansible_kernel }}"
+          - "Memory: {{ ansible_memtotal_mb }} MB"
+          - "CPUs: {{ ansible_processor_vcpus }}"

@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: django-app-dev
+  labels:
+    name: django-app-dev
+    environment: dev
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: django-app-prod
+  labels:
+    name: django-app-prod
+    environment: prod
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    name: monitoring

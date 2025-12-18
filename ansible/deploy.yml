@@ -1,0 +1,172 @@
+---
+- name: Deploy Django Application to Kubernetes
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars_files:
+    - vars/common.yml
+    - vars/secrets.yml # Use ansible-vault for this file
+
+  tasks:
+    - name: Display deployment information
+      debug:
+        msg: "Deploying {{ app_name }} to {{ environment }} environment"
+
+    - name: Ensure kubectl is installed
+      include_role:
+        name: kubectl
+
+    - name: Ensure helm is installed
+      include_role:
+        name: helm
+
+    - name: Configure kubectl for EKS
+      shell: |
+        aws eks update-kubeconfig \
+          --region {{ aws_region }} \
+          --name {{ eks_cluster_name }}
+      environment:
+        AWS_DEFAULT_REGION: "{{ aws_region }}"
+
+    - name: Verify cluster connectivity
+      shell: kubectl cluster-info
+      register: cluster_info
+      changed_when: false
+
+    - name: Display cluster info
+      debug:
+        var: cluster_info.stdout_lines
+
+    - name: Create Kubernetes namespaces
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ item }}"
+      loop:
+        - "{{ app_namespace }}"
+        - monitoring
+        - ingress-nginx
+
+    - name: Deploy application secrets
+      include_role:
+        name: k8s_secrets
+
+    - name: Deploy ConfigMaps
+      include_role:
+        name: k8s_configmaps
+
+    - name: Deploy database resources
+      include_role:
+        name: k8s_database
+
+    - name: Deploy Redis resources
+      include_role:
+        name: k8s_redis
+
+    - name: Deploy application backend
+      include_role:
+        name: k8s_backend
+
+    - name: Deploy Celery workers
+      include_role:
+        name: k8s_celery
+
+    - name: Deploy Nginx
+      include_role:
+        name: k8s_nginx
+
+    - name: Install Ingress Controller
+      include_role:
+        name: ingress_nginx
+
+    - name: Install Metrics Server
+      include_role:
+        name: metrics_server
+
+    - name: Verify deployments
+      shell: kubectl get pods -n {{ app_namespace }}
+      register: pods_status
+      changed_when: false
+
+    - name: Display pods status
+      debug:
+        var: pods_status.stdout_lines
+
+    - name: Wait for all pods to be ready
+      shell: |
+        kubectl wait --for=condition=ready pod \
+          --all -n {{ app_namespace }} \
+          --timeout=300s
+      register: wait_result
+      changed_when: false
+      failed_when: false
+
+    - name: Display services
+      shell: kubectl get svc -n {{ app_namespace }}
+      register: services_status
+      changed_when: false
+
+    - name: Display services
+      debug:
+        var: services_status.stdout_lines
+
+- name: Post-Deployment Tasks
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars_files:
+    - vars/common.yml
+
+  tasks:
+    - name: Run database migrations
+      shell: |
+        kubectl exec -n {{ app_namespace }} \
+          $(kubectl get pod -n {{ app_namespace }} -l app=backend -o jsonpath='{.items[0].metadata.name}') \
+          -- python manage.py migrate --noinput
+      register: migration_result
+      changed_when: "'No migrations to apply' not in migration_result.stdout"
+
+    - name: Display migration result
+      debug:
+        var: migration_result.stdout_lines
+
+    - name: Collect static files
+      shell: |
+        kubectl exec -n {{ app_namespace }} \
+          $(kubectl get pod -n {{ app_namespace }} -l app=backend -o jsonpath='{.items[0].metadata.name}') \
+          -- python manage.py collectstatic --noinput
+      register: collectstatic_result
+      changed_when: false
+
+    - name: Display collectstatic result
+      debug:
+        var: collectstatic_result.stdout_lines
+
+    - name: Create superuser (if needed)
+      shell: |
+        kubectl exec -n {{ app_namespace }} \
+          $(kubectl get pod -n {{ app_namespace }} -l app=backend -o jsonpath='{.items[0].metadata.name}') \
+          -- python manage.py shell -c "
+        from django.contrib.auth import get_user_model;
+        User = get_user_model();
+        User.objects.filter(username='admin').exists() or \
+        User.objects.create_superuser('admin', 'admin@example.com', '{{ django_admin_password }}')
+        "
+      register: superuser_result
+      changed_when: "'created' in superuser_result.stdout"
+      failed_when: false
+      no_log: true
+
+    - name: Deployment Summary
+      debug:
+        msg:
+          - "Deployment completed successfully!"
+          - "Namespace: {{ app_namespace }}"
+          - "Application: {{ app_name }}"
+          - "Environment: {{ environment }}"
+          - "Get application URL: kubectl get ingress -n {{ app_namespace }}"

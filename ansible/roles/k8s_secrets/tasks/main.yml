@@ -1,0 +1,55 @@
+---
+- name: Create Kubernetes secret for Django
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: django-secrets
+        namespace: "{{ app_namespace }}"
+      type: Opaque
+      stringData:
+        SECRET_KEY: "{{ django_secret_key }}"
+        DB_PASSWORD: "{{ db_password }}"
+        REDIS_PASSWORD: "{{ redis_password | default('') }}"
+
+- name: Create Kubernetes secret for database
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: postgres-credentials
+        namespace: "{{ app_namespace }}"
+      type: Opaque
+      stringData:
+        POSTGRES_USER: "{{ db_username }}"
+        POSTGRES_PASSWORD: "{{ db_password }}"
+        POSTGRES_DB: "{{ db_name }}"
+
+- name: Create Docker registry secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ecr-registry-secret
+        namespace: "{{ app_namespace }}"
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: "{{ docker_config_json | b64encode }}"
+  vars:
+    docker_config_json: |
+      {
+        "auths": {
+          "{{ docker_registry }}": {
+            "username": "{{ docker_username }}",
+            "password": "{{ docker_password }}",
+            "auth": "{{ (docker_username + ':' + docker_password) | b64encode }}"
+          }
+        }
+      }
+  when: docker_password != ""
